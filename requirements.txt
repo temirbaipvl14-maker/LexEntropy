@@ -1,0 +1,13 @@
+streamlit
+google-generativeai
+graphviz
+PyPDF2
+python-docx
+Pillow
+requests
+beautifulsoup4
+duckduckgo-search
+langchain-google-genai
+langchain-community
+faiss-cpu
+reportlab
