@@ -52,14 +52,8 @@ except:
 st.set_page_config(
     page_title="LexEntropy | AI Анализ", 
     layout="wide",
-    initial_sidebar_state="expanded" # ПРИНУДИТЕЛЬНО ОТКРЫВАЕТ МЕНЮ ВСЕГДА
+    initial_sidebar_state="expanded"
 )
-st.markdown("""
-<style>
-    .stButton>button[kind="primary"] {background-color: #5b45ff; color: white; border-radius: 8px;}
-    .expert-box {background-color: #2e2b70; color: white; padding: 20px; border-radius: 12px; margin-top: 15px;}
-</style>
-""", unsafe_allow_html=True)
 
 # --- Логика языков ---
 languages = {'Русский': 'ru', 'Қазақша': 'kk', 'English': 'en'}
