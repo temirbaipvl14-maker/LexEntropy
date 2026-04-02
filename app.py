@@ -49,10 +49,13 @@ except:
     pass
 
 # --- Конфигурация страницы ---
-st.set_page_config(page_title="LexEntropy | AI Анализ", layout="wide")
+st.set_page_config(
+    page_title="LexEntropy | AI Анализ", 
+    layout="wide",
+    initial_sidebar_state="expanded" # ПРИНУДИТЕЛЬНО ОТКРЫВАЕТ МЕНЮ ВСЕГДА
+)
 st.markdown("""
 <style>
-    #MainMenu {visibility: hidden;} footer {visibility: hidden;} 
     .stButton>button[kind="primary"] {background-color: #5b45ff; color: white; border-radius: 8px;}
     .expert-box {background-color: #2e2b70; color: white; padding: 20px; border-radius: 12px; margin-top: 15px;}
 </style>
