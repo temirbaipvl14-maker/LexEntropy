@@ -1,0 +1,20 @@
+# Секретные ключи и настройки Streamlit
+.streamlit/
+secrets.toml
+.env
+
+# Векторные базы данных
+faiss_index/
+
+# Сгенерированные PDF-отчеты
+*.pdf
+
+# Стандартные файлы Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Виртуальные окружения
+venv/
+.venv/
+env/
