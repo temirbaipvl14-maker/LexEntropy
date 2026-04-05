@@ -30,17 +30,16 @@ from reportlab.lib.styles import ParagraphStyle
 urllib3.disable_warnings()
 
 # === ГЛОБАЛЬНЫЕ НАСТРОЙКИ ===
-# Безопасное получение ключа (теперь он не утечет на GitHub)
 try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
 except KeyError:
-    st.error("Ключ API не найден! Добавьте его в .streamlit/secrets.toml или в настройки Streamlit Cloud.")
+    st.error("Ключ API не найден! Добавьте его в настройки Streamlit Cloud.")
     st.stop()
 
 os.environ["GOOGLE_API_KEY"] = GEMINI_API_KEY
 genai.configure(api_key=GEMINI_API_KEY)
 
-# Настройка шрифтов (Глобально, чтобы не было NameError)
+# Настройка шрифтов
 FONT_NAME = 'Helvetica'
 try:
     pdfmetrics.registerFont(TTFont('TimesNewRoman', 'times.ttf'))
@@ -57,41 +56,24 @@ st.set_page_config(
 
 # --- Логика языков ---
 languages = {'Русский': 'ru', 'Қазақша': 'kk', 'English': 'en'}
-selected_lang_name = st.sidebar.selectbox("🌐 Язык", list(languages.keys()))
+selected_lang_name = st.sidebar.selectbox("🌐 Язык интерфейса", list(languages.keys()))
 lang_code = languages[selected_lang_name]
 
-# ИСПРАВЛЕННЫЙ СЛОВАРЬ (Добавлены ключи для скачивания PDF)
 ui = {
     'ru': {
-        "title": "Ввод Документов",
-        "btn": "✨ Запустить Анализ",
-        "loading": "AI готовит базу...",
-        "report": "Отчет об энтропии",
-        "upload_label": "Загрузить файл (PDF, DOCX, TXT, JPG, PNG)",
-        "query_label": "Точечный запрос (необязательно):",
-        "download_pdf": "📥 Скачать PDF-отчет"
+        "title": "Ввод Документов", "btn": "✨ Запустить Анализ", "loading": "AI парсит Adilet.zan.kz...",
+        "report": "Отчет об энтропии", "upload_label": "Загрузить файл", "query_label": "Точечный запрос:", "download_pdf": "📥 Скачать PDF"
     },
     'kk': {
-        "title": "Құжаттарды енгізу",
-        "btn": "✨ Талдауды бастау",
-        "loading": "AI базаны дайындауда...",
-        "report": "Талдау есебі",
-        "upload_label": "Файлды жүктеу (PDF, DOCX, TXT, JPG, PNG)",
-        "query_label": "Нақты сұраныс (міндетті емес):",
-        "download_pdf": "📥 PDF есепті жүктеп алу"
+        "title": "Құжаттарды енгізу", "btn": "✨ Талдауды бастау", "loading": "AI Adilet.zan.kz өңдеуде...",
+        "report": "Талдау есебі", "upload_label": "Файлды жүктеу", "query_label": "Нақты сұраныс:", "download_pdf": "📥 PDF жүктеу"
     },
     'en': {
-        "title": "Document Input",
-        "btn": "✨ Run Analysis",
-        "loading": "AI is preparing database...",
-        "report": "Analysis Report",
-        "upload_label": "Upload file (PDF, DOCX, TXT, JPG, PNG)",
-        "query_label": "Specific query (optional):",
-        "download_pdf": "📥 Download PDF Report"
+        "title": "Document Input", "btn": "✨ Run Analysis", "loading": "AI is parsing Adilet.zan.kz...",
+        "report": "Analysis Report", "upload_label": "Upload file", "query_label": "Query:", "download_pdf": "📥 Download PDF"
     }
 }
 _ = ui[lang_code]
-
 
 # --- Функции извлечения текста ---
 def extract_text(file):
@@ -105,142 +87,112 @@ def extract_text(file):
     else:
         return file.read().decode("utf-8")
 
-
-def get_text_from_adilet(url):
-    resp = requests.get(url, verify=False, timeout=15)
-    return ' '.join([p.text for p in BeautifulSoup(resp.content, 'html.parser').find_all('p')])
-
+def get_any_text_from_adilet(url):
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    resp = requests.get(url, headers=headers, verify=False, timeout=15)
+    soup = BeautifulSoup(resp.content, 'html.parser')
+    # Собираем текст из всех основных блоков Adilet (p, div с текстом статей)
+    content_blocks = soup.find_all(['p', 'div'], class_=['article', 'text', 'content'])
+    if not content_blocks:
+        content_blocks = soup.find_all('p')
+    return ' '.join([b.text for b in content_blocks])
 
 # --- ГЛАВНАЯ ЛОГИКА АНАЛИЗА ---
 def retrieve_and_analyze(doc_data, is_image, query, target_lang):
     model = genai.GenerativeModel('gemini-2.5-flash')
     embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
 
-    # 1. Определение закона/документа (ИСПРАВЛЕНО ДЛЯ ЛЮБЫХ ДОКУМЕНТОВ)
-    st.toast("🔍 Определяю документ...")
-    prompt_id = "Определи точное официальное название этого юридического документа (закона, кодекса, конвенции, декларации). Напиши ТОЛЬКО название, без лишних слов."
-    law_name = model.generate_content(
-        [prompt_id, doc_data] if is_image else prompt_id + f"\n\n{str(doc_data)[:2000]}").text.strip()
-
-    # 2. Поиск ссылки
-    COMMON = {
-        "трудовой кодекс": "https://adilet.zan.kz/rus/docs/K1500000414",
-        "уголовно-процессуальный кодекс": "https://adilet.zan.kz/rus/docs/K1400000231",
-        "национальной безопасности": "https://adilet.zan.kz/rus/docs/Z1200000527"
-    }
-    url = next((v for k, v in COMMON.items() if k in law_name.lower()), None)
-    if not url:
-        with DDGS() as ddgs:
-            res = list(ddgs.text(f"site:adilet.zan.kz/rus/docs {law_name}", max_results=1))
-            if res: url = res[0]['href']
-
-    if not url: return f"❌ Документ '{law_name}' не найден."
-
-    # 3. Векторизация с защитой от 429
-    st.toast("📥 Загрузка эталона (с защитой от лимитов)...")
+    # 1. Определение закона и его языка
+    st.toast("🔍 Распознаю документ и язык...")
+    id_prompt = """Проанализируй текст и выведи: 
+    1. Официальное название документа.
+    2. Язык документа (напиши только 'rus' или 'kaz').
+    Формат ответа: Название | язык"""
+    
+    id_res = model.generate_content(
+        [id_prompt, doc_data] if is_image else id_prompt + f"\n\n{str(doc_data)[:2000]}").text.strip()
+    
     try:
-        text = get_text_from_adilet(url)
-        chunks = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200).split_text(text)[:60]
-        vdb = None
-        for i in range(0, len(chunks), 15):
-            batch = chunks[i:i + 15]
-            if vdb is None:
-                vdb = FAISS.from_texts(batch, embeddings)
-            else:
-                vdb.add_texts(batch)
-            time.sleep(3)
-    except Exception as e:
-        return f"❌ Ошибка векторизации: {e}"
+        law_name, law_lang = [x.strip() for x in id_res.split('|')]
+    except:
+        law_name, law_lang = id_res, "rus"
 
-    # 4. Анализ (ИСПРАВЛЕНА ЛОГИКА ПОИСКА И ПРОМПТ АУДИТОРА)
-    st.toast("⚖️ Сверка текстов...")
+    # 2. Универсальный поиск по Adilet.zan.kz
+    st.toast(f"🌐 Ищу '{law_name}' на Adilet...")
+    # Формируем запрос строго под нужный язык портала
+    lang_path = "rus" if "rus" in law_lang.lower() else "kaz"
+    search_query = f"site:adilet.zan.kz/{lang_path}/docs {law_name}"
     
-    # Ищем в базе adilet сам загруженный текст (первые 1000 символов)
-    search_query = str(query) if query else str(doc_data)[:1000]
+    url = None
+    try:
+        with DDGS() as ddgs:
+            res = list(ddgs.text(search_query, max_results=1))
+            if res: url = res[0]['href']
+    except: pass
+
+    if not url: return f"❌ Документ '{law_name}' не найден на портале Adilet.zan.kz."
+
+    # 3. Парсинг и векторизация
+    st.toast("📥 Загружаю эталонный текст...")
+    try:
+        full_legal_text = get_any_text_from_adilet(url)
+        # Разбиваем на куски побольше для точности
+        chunks = RecursiveCharacterTextSplitter(chunk_size=1200, chunk_overlap=200).split_text(full_legal_text)[:50]
+        vdb = FAISS.from_texts(chunks[:15], embeddings)
+        if len(chunks) > 15:
+            time.sleep(2) # Защита от лимитов Google API
+            vdb.add_texts(chunks[15:40])
+    except Exception as e:
+        return f"❌ Ошибка загрузки базы: {e}"
+
+    # 4. Глубокий аудит коллизий
+    st.toast("⚖️ Сверяю каждую букву...")
+    search_context = str(query) if query else str(doc_data)[:1000]
+    relevant_docs = vdb.similarity_search(search_context, k=5)
+    context_text = "\n\n".join([d.page_content for d in relevant_docs])
     
-    # Берем больше оригинального текста для сравнения (k=5)
-    context = "\n\n".join([d.page_content for d in vdb.similarity_search(search_query, k=5)])
-    
-    final_prompt = f"""Ты строгий ИИ-аудитор. Твоя задача — побуквенно и по смыслу сравнить ЗАГРУЖЕННЫЙ ДОКУМЕНТ с ОРИГИНАЛЬНЫМ ТЕКСТОМ (Контекст).
-    Найди все искажения, удаленные слова, измененные цифры или смысловые ошибки, которые кто-то специально внес в загруженный документ.
-    Если документ полностью совпадает с оригиналом, так и скажи.
+    audit_prompt = f"""Ты - эксперт-юрист. Сравни ЗАГРУЖЕННЫЙ ДОКУМЕНТ с ОФИЦИАЛЬНЫМ ТЕКСТОМ из Adilet.zan.kz.
+    Найди любые расхождения: измененные сроки, суммы, права или обязанности. 
+    Если загруженный текст содержит ошибки по сравнению с оригиналом - укажи их четко.
     Язык ответа: {target_lang}.
-    Оригинальный текст с портала Adilet: {context}"""
+    ОРИГИНАЛ ИЗ ADILET: {context_text}"""
 
     return model.generate_content(
-        [final_prompt, doc_data] if is_image else final_prompt + f"\n\nЗАГРУЖЕННЫЙ ДОКУМЕНТ:\n{str(doc_data)[:15000]}"
+        [audit_prompt, doc_data] if is_image else audit_prompt + f"\n\nЗАГРУЖЕННЫЙ ТЕКСТ:\n{str(doc_data)[:15000]}"
     ).text
 
-
-# --- ИСПРАВЛЕННАЯ ГЕНЕРАЦИЯ PDF (Paragraph + Logo) ---
+# --- ГЕНЕРАЦИЯ PDF ---
 def make_pdf(text, lang_code_pdf):
     buf = io.BytesIO()
     p = canvas.Canvas(buf, pagesize=A4)
     width, height = A4
-
-    # Отрисовка логотипа
     if os.path.exists('logo.png'):
-        try:
-            p.drawImage('logo.png', 1 * cm, height - 2 * cm, width=1.2 * cm, height=1.2 * cm, mask='auto')
-        except:
-            pass
-
-    # Шапка документа
+        try: p.drawImage('logo.png', 1*cm, height-2*cm, width=1.2*cm, height=1.2*cm, mask='auto')
+        except: pass
     p.setFont(FONT_NAME, 9)
     p.setFillColorRGB(0.5, 0.5, 0.5)
-    date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    p.drawString(2.5 * cm, height - 1.25 * cm, f"LexEntropy Report | Date: {date_str} | Lang: {lang_code_pdf.upper()}")
-    p.line(1 * cm, height - 2.2 * cm, width - 1 * cm, height - 2.2 * cm)
-
-    # Настройка стиля для переноса текста
-    custom_style = ParagraphStyle(
-        'CustomStyle',
-        fontName=FONT_NAME,
-        fontSize=11,
-        leading=16,
-        textColor='black'
-    )
-
-    y_position = height - 3 * cm
-    margin_x = 1.5 * cm
-    usable_width = width - 2 * margin_x
-
-    # Отрисовка текста по абзацам
+    p.drawString(2.5*cm, height-1.25*cm, f"LexEntropy Official Audit | {datetime.datetime.now().strftime('%Y-%m-%d')}")
+    p.line(1*cm, height-2.2*cm, width-1*cm, height-2.2*cm)
+    
+    style = ParagraphStyle('Normal', fontName=FONT_NAME, fontSize=11, leading=15)
+    y = height - 3*cm
     for line in text.split('\n'):
-        if not line.strip():
-            y_position -= 10
-            continue
-
-        clean_line = line.replace('**', '').replace('>', 'ЦИТАТА:').replace('<', '&lt;').replace('>', '&gt;').strip()
-        para = Paragraph(clean_line, custom_style)
-        w, h = para.wrap(usable_width, height)
-
-        if y_position - h < 1.5 * cm:
-            p.showPage()
-            p.setFont(FONT_NAME, 9)
-            p.setFillColorRGB(0.5, 0.5, 0.5)
-            p.drawString(width - 3 * cm, height - 1 * cm, "LexEntropy")
-            p.line(1 * cm, height - 1.5 * cm, width - 1 * cm, height - 1.5 * cm)
-            y_position = height - 2.5 * cm
-
-        para.drawOn(p, margin_x, y_position - h)
-        y_position -= (h + 8)
-
+        if not line.strip(): y -= 10; continue
+        clean = line.replace('**', '').replace('>', '').replace('<', '&lt;').strip()
+        para = Paragraph(clean, style)
+        w, h = para.wrap(width-3*cm, height)
+        if y - h < 2*cm: p.showPage(); y = height - 2*cm
+        para.drawOn(p, 1.5*cm, y-h)
+        y -= (h + 6)
     p.save()
     buf.seek(0)
     return buf
 
-
-# --- Интерфейс Streamlit ---
+# --- Интерфейс ---
 st.title("📚 LexEntropy")
 with st.sidebar:
-    # Отрисовка логотипа на сайте
-    if os.path.exists('logo.png'):
-        try:
-            st.image('logo.png', use_container_width=True)
-        except:
-            pass
-    st.markdown("<div class='expert-box'><b>RAG Агент активен</b><br>v3.8-stable</div>", unsafe_allow_html=True)
+    if os.path.exists('logo.png'): st.image('logo.png', use_container_width=True)
+    st.info("Dynamic RAG Engine: Linked to Adilet.zan.kz")
 
 up = st.file_uploader(_["upload_label"], type=["pdf", "docx", "png", "jpg", "txt"])
 q = st.text_input(_["query_label"])
@@ -249,9 +201,7 @@ if st.button(_["btn"], type="primary") and up:
     with st.status(_["loading"]) as status:
         data = extract_text(up)
         res = retrieve_and_analyze(data, isinstance(data, Image.Image), q, selected_lang_name)
-        status.update(label="Готово!", state="complete")
-
+        status.update(label="Анализ готов!", state="complete")
     st.markdown("### " + _["report"])
     st.markdown(res)
-    st.download_button(_["download_pdf"], make_pdf(res, lang_code),
-                       f"LexEntropy_Report_{datetime.datetime.now().strftime('%Y%m%d_%H%M')}.pdf")
+    st.download_button(_["download_pdf"], make_pdf(res, lang_code), f"Audit_{datetime.datetime.now().strftime('%H%M')}.pdf")
