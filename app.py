@@ -117,20 +117,50 @@ def retrieve_and_analyze(doc_data, is_image, query, target_lang):
     except:
         law_name, law_lang = id_res, "rus"
 
-    # 2. Универсальный поиск по Adilet.zan.kz
-    st.toast(f"🌐 Ищу '{law_name}' на Adilet...")
-    # Формируем запрос строго под нужный язык портала
+    # 2. Универсальный поиск по Adilet.zan.kz (КАРДИНАЛЬНОЕ РЕШЕНИЕ)
+    st.toast(f"🌐 Ищу '{law_name}'...")
     lang_path = "rus" if "rus" in law_lang.lower() else "kaz"
-    search_query = f"site:adilet.zan.kz/{lang_path}/docs {law_name}"
-    
     url = None
-    try:
-        with DDGS() as ddgs:
-            res = list(ddgs.text(search_query, max_results=1))
-            if res: url = res[0]['href']
-    except: pass
 
-    if not url: return f"❌ Документ '{law_name}' не найден на портале Adilet.zan.kz."
+    # Уровень 1: Быстрый кэш для самых частых кодексов
+    COMMON_DOCS = {
+        "трудовой кодекс": "https://adilet.zan.kz/rus/docs/K1500000414",
+        "уголовно-процессуальный": "https://adilet.zan.kz/rus/docs/K1400000231",
+        "национальной безопасности": "https://adilet.zan.kz/rus/docs/Z1200000527"
+    }
+    for key, link in COMMON_DOCS.items():
+        if key in law_name.lower(): url = link; break
+
+    # Уровень 2: ВНУТРЕННИЙ ПОИСК АДИЛЕТА (Прямой парсинг сайта без DuckDuckGo)
+    if not url:
+        import urllib.parse
+        try:
+            # ИИ формирует запрос прямо во внутренний поиск сайта Адилет
+            safe_query = urllib.parse.quote(law_name.encode('utf-8'))
+            adilet_search_url = f"https://adilet.zan.kz/{lang_path}/search/docs/fulltext={safe_query}"
+            
+            headers = {'User-Agent': 'Mozilla/5.0'}
+            resp = requests.get(adilet_search_url, headers=headers, verify=False, timeout=10)
+            soup = BeautifulSoup(resp.content, 'html.parser')
+            
+            # Вытаскиваем первую же ссылку на документ из их собственных результатов поиска
+            for a in soup.find_all('a', href=True):
+                href = a['href']
+                if f"/{lang_path}/docs/" in href and "search" not in href and "history" not in href:
+                    url = f"https://adilet.zan.kz{href}"
+                    break
+        except Exception:
+            pass
+
+    # Уровень 3: Запасной парашют через DuckDuckGo (если Адилет лежит)
+    if not url:
+        try:
+            with DDGS() as ddgs:
+                for r in list(ddgs.text(f"site:adilet.zan.kz {law_name}", max_results=3)):
+                    if "adilet.zan.kz" in r['href']: url = r['href']; break
+        except Exception: pass
+
+    if not url: return f"❌ Ошибка алгоритма: Документ '{law_name}' не найден в базах."
 
     # 3. Парсинг и векторизация
     st.toast("📥 Загружаю эталонный текст...")
