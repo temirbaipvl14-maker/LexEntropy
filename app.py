@@ -116,11 +116,11 @@ def retrieve_and_analyze(doc_data, is_image, query, target_lang):
     model = genai.GenerativeModel('gemini-2.5-flash')
     embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
 
-    # 1. Определение закона
-    st.toast("🔍 Определяю закон...")
-    prompt_id = "Определи официальное название закона РК для этого текста. Только название."
+    # 1. Определение закона/документа (ИСПРАВЛЕНО ДЛЯ ЛЮБЫХ ДОКУМЕНТОВ)
+    st.toast("🔍 Определяю документ...")
+    prompt_id = "Определи точное официальное название этого юридического документа (закона, кодекса, конвенции, декларации). Напиши ТОЛЬКО название, без лишних слов."
     law_name = model.generate_content(
-        [prompt_id, doc_data] if is_image else prompt_id + f"\n\n{doc_data[:2000]}").text.strip()
+        [prompt_id, doc_data] if is_image else prompt_id + f"\n\n{str(doc_data)[:2000]}").text.strip()
 
     # 2. Поиск ссылки
     COMMON = {
@@ -134,7 +134,7 @@ def retrieve_and_analyze(doc_data, is_image, query, target_lang):
             res = list(ddgs.text(f"site:adilet.zan.kz/rus/docs {law_name}", max_results=1))
             if res: url = res[0]['href']
 
-    if not url: return f"❌ Закон '{law_name}' не найден."
+    if not url: return f"❌ Документ '{law_name}' не найден."
 
     # 3. Векторизация с защитой от 429
     st.toast("📥 Загрузка эталона (с защитой от лимитов)...")
@@ -152,13 +152,24 @@ def retrieve_and_analyze(doc_data, is_image, query, target_lang):
     except Exception as e:
         return f"❌ Ошибка векторизации: {e}"
 
-    # 4. Анализ
-    st.toast("⚖️ Поиск противоречий...")
-    context = "\n\n".join([d.page_content for d in vdb.similarity_search(str(query) if query else "коллизии", k=3)])
-    final_prompt = f"Ты ИИ-аналитик. Найди 1 противоречие в документе с законом {law_name}.\nЯзык: {target_lang}.\nКонтекст: {context}"
+    # 4. Анализ (ИСПРАВЛЕНА ЛОГИКА ПОИСКА И ПРОМПТ АУДИТОРА)
+    st.toast("⚖️ Сверка текстов...")
+    
+    # Ищем в базе adilet сам загруженный текст (первые 1000 символов)
+    search_query = str(query) if query else str(doc_data)[:1000]
+    
+    # Берем больше оригинального текста для сравнения (k=5)
+    context = "\n\n".join([d.page_content for d in vdb.similarity_search(search_query, k=5)])
+    
+    final_prompt = f"""Ты строгий ИИ-аудитор. Твоя задача — побуквенно и по смыслу сравнить ЗАГРУЖЕННЫЙ ДОКУМЕНТ с ОРИГИНАЛЬНЫМ ТЕКСТОМ (Контекст).
+    Найди все искажения, удаленные слова, измененные цифры или смысловые ошибки, которые кто-то специально внес в загруженный документ.
+    Если документ полностью совпадает с оригиналом, так и скажи.
+    Язык ответа: {target_lang}.
+    Оригинальный текст с портала Adilet: {context}"""
 
     return model.generate_content(
-        [final_prompt, doc_data] if is_image else final_prompt + f"\n\nДОК: {doc_data[:4000]}").text
+        [final_prompt, doc_data] if is_image else final_prompt + f"\n\nЗАГРУЖЕННЫЙ ДОКУМЕНТ:\n{str(doc_data)[:15000]}"
+    ).text
 
 
 # --- ИСПРАВЛЕННАЯ ГЕНЕРАЦИЯ PDF (Paragraph + Logo) ---
